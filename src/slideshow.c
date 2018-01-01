@@ -247,6 +247,7 @@ void feh_reload_image(winwidget w, int resize, int force_new)
 void slideshow_change_image(winwidget winwid, int change, int render)
 {
 	gib_list *last = NULL;
+	gib_list *last_file = current_file;
 	int i = 0;
 	int jmp = 1;
 	/* We can't use filelist_len in the for loop, since that changes when we
@@ -364,6 +365,9 @@ void slideshow_change_image(winwidget winwid, int change, int render)
 			eprintf("BUG!\n");
 			break;
 		}
+
+		if (current_file == last_file)
+			break;
 
 		if (opt.keep_zoom_vp) {
 		/* pre loadimage - record settings */
@@ -715,14 +719,14 @@ gib_list *feh_list_jump(gib_list * root, gib_list * l, int direction, int num)
 					/* Randomize the filename order */
 					filelist = gib_list_randomize(filelist);
 					ret = filelist;
-				} else {
+				} else if (!opt.no_cycle) {
 					ret = root;
 				}
 			}
 		} else {
 			if (ret->prev)
 				ret = ret->prev;
-			else
+			else if (!opt.no_cycle)
 				ret = gib_list_last(ret);
 		}
 	}

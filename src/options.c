@@ -412,6 +412,7 @@ static void feh_parse_option_array(int argc, char **argv, int finalrun)
 		{"insecure"      , 0, 0, 240},
 		{"no-recursive"  , 0, 0, 241},
 		{"cache-size"    , 1, 0, 243},
+		{"no-cycle"      , 0, 0, 244},
 		{0, 0, 0, 0}
 	};
 	int optch = 0, cmdx = 0;
@@ -781,6 +782,9 @@ static void feh_parse_option_array(int argc, char **argv, int finalrun)
 				opt.cache_size = 0;
 			if (opt.cache_size > 2048)
 				opt.cache_size = 2048;
+			break;
+		case 244:
+			opt.no_cycle = 1;
 			break;
 		default:
 			break;
