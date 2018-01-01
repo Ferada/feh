@@ -365,11 +365,6 @@ void slideshow_change_image(winwidget winwid, int change, int render)
 			break;
 		}
 
-		if (last) {
-			filelist = feh_file_remove_from_list(filelist, last);
-			last = NULL;
-		}
-
 		if (opt.keep_zoom_vp) {
 		/* pre loadimage - record settings */
 			tmode = winwid->mode;
