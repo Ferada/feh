@@ -127,6 +127,7 @@ struct __fehoptions {
 
 	double slideshow_delay;
 
+	signed short dcraw_timeout;
 	signed short magick_timeout;
 
 	Imlib_Font menu_fn;

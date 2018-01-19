@@ -61,7 +61,9 @@ int num_xinerama_screens;
 
 int childpid = 0;
 
+static int feh_file_is_raw(char *filename);
 static char *feh_http_load_image(char *url);
+static char *feh_dcraw_load_image(char *filename);
 static char *feh_magick_load_image(char *filename);
 
 #ifdef HAVE_LIBXINERAMA
@@ -204,8 +206,7 @@ void feh_imlib_print_load_error(char *file, winwidget w, Imlib_Load_Error err)
 int feh_load_image(Imlib_Image * im, feh_file * file)
 {
 	Imlib_Load_Error err = IMLIB_LOAD_ERROR_NONE;
-	enum { SRC_IMLIB, SRC_HTTP, SRC_MAGICK } image_source =
-		SRC_IMLIB;
+	enum { SRC_IMLIB, SRC_HTTP, SRC_MAGICK, SRC_DCRAW } image_source = SRC_IMLIB;
 	char *tmpname = NULL;
 	char *real_filename = NULL;
 
@@ -220,16 +221,23 @@ int feh_load_image(Imlib_Image * im, feh_file * file)
 		if ((tmpname = feh_http_load_image(file->filename)) == NULL)
 			err = IMLIB_LOAD_ERROR_FILE_DOES_NOT_EXIST;
 	}
+	else if (opt.dcraw_timeout >= 0 && feh_file_is_raw(file->filename)) {
+		image_source = SRC_DCRAW;
+		tmpname = feh_dcraw_load_image(file->filename);
+		if (!tmpname)
+			err = IMLIB_LOAD_ERROR_NO_LOADER_FOR_FILE_FORMAT;
+	}
 	else
 		*im = imlib_load_image_with_error_return(file->filename, &err);
 
-	if ((err == IMLIB_LOAD_ERROR_UNKNOWN)
-			|| (err == IMLIB_LOAD_ERROR_NO_LOADER_FOR_FILE_FORMAT)) {
+	if (opt.magick_timeout >= 0 && (
+			(err == IMLIB_LOAD_ERROR_UNKNOWN) ||
+			(err == IMLIB_LOAD_ERROR_NO_LOADER_FOR_FILE_FORMAT))) {
 		image_source = SRC_MAGICK;
 		tmpname = feh_magick_load_image(file->filename);
 	}
 
-	if ((image_source != SRC_IMLIB) && tmpname) {
+	if (tmpname) {
 		*im = imlib_load_image_with_error_return(tmpname, &err);
 		if (im) {
 			real_filename = file->filename;
@@ -240,7 +248,7 @@ int feh_load_image(Imlib_Image * im, feh_file * file)
 			file->ed = exif_get_data(tmpname);
 #endif
 		}
-		if ((image_source == SRC_MAGICK) || !opt.keep_http)
+		if ((image_source != SRC_HTTP) || !opt.keep_http)
 			unlink(tmpname);
 
 		free(tmpname);
@@ -289,6 +297,124 @@ int feh_load_image(Imlib_Image * im, feh_file * file)
 	return(1);
 }
 
+static int feh_file_is_raw(char *filename)
+{
+	childpid = fork();
+	if (childpid == -1) {
+		perror("fork");
+		return 0;
+	}
+
+	if (childpid == 0) {
+		if (opt.quiet) {
+			int devnull = open("/dev/null", O_WRONLY);
+			dup2(devnull, 1);
+			dup2(devnull, 2);
+		}
+		execl("/bin/dcraw", "dcraw", "-i", filename, NULL);
+		_exit(1);
+	} else {
+		int status;
+		do {
+			waitpid(childpid, &status, WUNTRACED);
+			if (WIFEXITED(status)) {
+				return !WEXITSTATUS(status);
+			}
+		} while (!WIFEXITED(status) && !WIFSIGNALED(status));
+	}
+
+	return 0;
+}
+
+static char *feh_dcraw_load_image(char *filename)
+{
+	char *basename;
+	char *tmpname;
+	char *sfn;
+	int fd = -1;
+
+	basename = strrchr(filename, '/');
+
+	if (basename == NULL)
+		basename = filename;
+	else
+		basename++;
+
+	tmpname = feh_unique_filename("/tmp/", basename);
+
+	if (strlen(tmpname) > (NAME_MAX-6))
+		tmpname[NAME_MAX-7] = '\0';
+
+	sfn = estrjoin("_", tmpname, "XXXXXX", NULL);
+	free(tmpname);
+
+	fd = mkstemp(sfn);
+
+	if (fd == -1) {
+		free(sfn);
+		return NULL;
+	}
+
+	int filedes[2];
+	if (pipe(filedes) == -1) {
+		unlink(sfn);
+		free(sfn);
+		return NULL;
+	}
+
+	childpid = fork();
+	if (childpid == -1) {
+		weprintf("%s: Can't load with dcraw. Fork failed:", filename);
+		unlink(sfn);
+		free(sfn);
+		return NULL;
+	} else if (childpid == 0) {
+
+		while ((dup2(filedes[1], STDOUT_FILENO) == -1) && (errno == EINTR)) {}
+		close(filedes[1]);
+		close(filedes[0]);
+
+		alarm(opt.dcraw_timeout);
+		execlp("dcraw", "dcraw", "-c", "-e", filename, NULL);
+		_exit(1);
+	}
+	close(filedes[1]);
+
+	char buffer[4096];
+	while (1) {
+		ssize_t count = read(filedes[0], buffer, sizeof(buffer));
+		if (count == -1) {
+			if (errno == EINTR) {
+				continue;
+			} else {
+				perror("read");
+				unlink(sfn);
+				free(sfn);
+				exit(1);
+			}
+		} else if (count == 0) {
+			break;
+		} else {
+			write(fd, buffer, count);
+		}
+	}
+	close(filedes[0]);
+
+	close(fd);
+
+	int status;
+	waitpid(-1, &status, 0);
+	if (WIFSIGNALED(status)) {
+		unlink(sfn);
+		free(sfn);
+		sfn = NULL;
+		if (!opt.quiet)
+			weprintf("%s - Conversion took too long, skipping", filename);
+	}
+
+	return sfn;
+}
+
 static char *feh_magick_load_image(char *filename)
 {
 	char *argv_fn;
@@ -297,9 +423,6 @@ static char *feh_magick_load_image(char *filename)
 	char *sfn;
 	int fd = -1, devnull = -1;
 	int status;
-
-	if (opt.magick_timeout < 0)
-		return NULL;
 
 	basename = strrchr(filename, '/');
 
